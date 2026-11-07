@@ -1,0 +1,62 @@
+.ltv-btn {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  width: auto !important;
+  padding: 0 6px !important;
+  vertical-align: top;
+}
+.ltv-pill {
+  font: 700 12px/1 Roboto, Arial, sans-serif;
+  color: #fff;
+  border: 2px solid rgba(255, 255, 255, .85);
+  border-radius: 6px;
+  padding: 3px 5px;
+  letter-spacing: .5px;
+  transition: background .2s, border-color .2s, color .2s;
+}
+.ltv-btn.on .ltv-pill {
+  background: #da251d;
+  border-color: #ffcd00;
+  color: #ffcd00;
+}
+.ltv-btn.loading .ltv-pill {
+  border-color: #ffcd00;
+  animation: ltv-blink 1s infinite;
+}
+@keyframes ltv-blink { 50% { opacity: .35; } }
+
+.ltv-toast {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 70;
+  max-width: 70%;
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, .78);
+  color: #fff;
+  font: 500 14px/1.4 Roboto, Arial, sans-serif;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .25s;
+}
+.ltv-toast.show { opacity: 1; }
+
+.ltv-sub {
+  position: absolute;
+  left: 50%;
+  bottom: 72px;
+  z-index: 69;
+  transform: translateX(-50%);
+  max-width: 82%;
+  padding: 6px 12px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, .72);
+  color: #ffe866;
+  font: 500 19px/1.4 Roboto, Arial, sans-serif;
+  text-align: center;
+  display: none;
+  pointer-events: none;
+}
+.ltv-sub.show { display: block; }

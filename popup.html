@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<title>Lồng tiếng Việt</title>
+<style>
+  :root { --red: #da251d; --gold: #ffcd00; --bg: #fff; --fg: #1f1f1f; --muted: #666; --line: #e6e6e6; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #1e1e1e; --fg: #eee; --muted: #aaa; --line: #333; } }
+  body { width: 300px; margin: 0; padding: 14px 16px 16px; background: var(--bg); color: var(--fg); font: 13px/1.4 "Segoe UI", Roboto, Arial, sans-serif; }
+  h1 { font-size: 15px; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+  h1 .flag { width: 22px; height: 15px; background: var(--red); border-radius: 2px; display: inline-flex; align-items: center; justify-content: center; color: var(--gold); font-size: 11px; }
+  #toggle { width: 100%; padding: 9px; border: 0; border-radius: 8px; background: var(--red); color: #fff; font-weight: 600; font-size: 14px; cursor: pointer; }
+  #toggle.off { background: #555; }
+  #status { color: var(--muted); margin: 6px 0 12px; min-height: 18px; }
+  label { display: block; margin: 10px 0 0; }
+  .row { display: flex; justify-content: space-between; }
+  .val { color: var(--muted); font-variant-numeric: tabular-nums; }
+  input[type=range], select { width: 100%; margin-top: 4px; }
+  select { padding: 4px; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; }
+  .check { display: flex; gap: 8px; align-items: center; }
+  hr { border: 0; border-top: 1px solid var(--line); margin: 12px 0 4px; }
+  #test { margin-top: 6px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--fg); cursor: pointer; }
+  .tip { color: var(--muted); font-size: 12px; margin-top: 12px; }
+</style>
+</head>
+<body>
+  <h1><span class="flag">★</span>Lồng tiếng Việt cho YouTube</h1>
+  <button id="toggle" class="off">Bật lồng tiếng video này</button>
+  <div id="status"></div>
+
+  <label class="check"><input type="checkbox" id="autoStart"> Tự lồng tiếng khi mở video</label>
+  <label class="check"><input type="checkbox" id="showSubs"> Hiện phụ đề tiếng Việt</label>
+  <hr>
+  <label>Giọng đọc
+    <select id="voice"></select>
+  </label>
+  <button id="test">▶ Nghe thử</button>
+  <label><div class="row"><span>Tốc độ đọc</span><span class="val" id="rateVal"></span></div>
+    <input type="range" id="rate" min="0.8" max="1.6" step="0.05"></label>
+  <label><div class="row"><span>Âm gốc khi đang đọc</span><span class="val" id="duckSpeakingVal"></span></div>
+    <input type="range" id="duckSpeaking" min="0" max="0.6" step="0.05"></label>
+  <label><div class="row"><span>Âm gốc lúc nghỉ</span><span class="val" id="duckGapVal"></span></div>
+    <input type="range" id="duckGap" min="0" max="1" step="0.05"></label>
+  <label><div class="row"><span>Âm lượng lồng tiếng</span><span class="val" id="dubVolumeVal"></span></div>
+    <input type="range" id="dubVolume" min="0.3" max="1" step="0.05"></label>
+
+  <div class="tip">Phím tắt: <b>Alt+V</b> hoặc nút <b>VI</b> trên thanh trình phát.<br>Hỗ trợ giọng <b>Hoài My & Nam Minh (Tự nhiên)</b> trên cả <b>Google Chrome</b> và <b>Edge</b>.</div>
+  <script src="popup.js"></script>
+</body>
+</html>
