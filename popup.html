@@ -21,6 +21,14 @@
   hr { border: 0; border-top: 1px solid var(--line); margin: 12px 0 6px; }
   #test { margin-top: 6px; padding: 5px 12px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--fg); cursor: pointer; font-size: 12px; }
   #test:hover { background: rgba(128, 128, 128, 0.1); }
+  .ai-box { border: 1px dashed var(--line); border-radius: 8px; padding: 8px; margin-top: 8px; }
+  .ai-box .btnrow { display: flex; gap: 6px; margin: 6px 0; }
+  .ai-box button { flex: 1; padding: 6px 4px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--fg); cursor: pointer; font-size: 11.5px; }
+  .ai-box button:hover { background: rgba(128, 128, 128, 0.12); }
+  .ai-box button.primary { background: #7c3aed; border-color: #7c3aed; color: #fff; font-weight: 700; }
+  .ai-box textarea { width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); font: 11.5px/1.5 inherit; padding: 6px; resize: vertical; }
+  #aiStatus { font-size: 11.5px; color: var(--muted); margin-top: 4px; min-height: 14px; }
+  #aiBadge { background: #7c3aed; color: #fff; font-size: 10px; padding: 0 6px; border-radius: 8px; }
   .tip { color: var(--muted); font-size: 11.5px; margin-top: 12px; line-height: 1.5; }
 </style>
 </head>
@@ -54,6 +62,18 @@
     <input type="range" id="duckGap" min="0" max="1" step="0.05"></label>
   <label><div class="row"><span>Âm lượng lồng tiếng</span><span class="val" id="dubVolumeVal"></span></div>
     <input type="range" id="dubVolume" min="0.3" max="1" step="0.05"></label>
+
+  <div class="ai-box">
+    <b>Kịch bản AI riêng <span id="aiBadge" style="display:none">AI</span></b>
+    <div style="color:var(--muted);font-size:11.5px;margin-top:2px">Bấm <b>Lấy prompt + sub gốc</b> → dán vào Gemini/ChatGPT → dán kết quả vào ô dưới → <b>Dùng bản AI</b>.</div>
+    <div class="btnrow">
+      <button id="getPrompt">Lấy prompt + sub gốc</button>
+      <button id="clearAi">Xóa bản AI</button>
+    </div>
+    <textarea id="aiScript" rows="6" placeholder="Dán bản dịch AI vào đây (mỗi dòng 1 câu, hoặc SRT/VTT đều được)…"></textarea>
+    <div class="btnrow"><button id="useAi" class="primary">Dùng bản AI này lồng tiếng</button></div>
+    <div id="aiStatus"></div>
+  </div>
 
   <div class="tip">Phím tắt: <b>Alt+V</b> hoặc nút <b>VI</b> trên trình phát.<br>Hỗ trợ giọng <b>Hoài My & Nam Minh (Tự nhiên)</b> chuẩn HD trên cả <b>Chrome</b> và <b>Edge</b>.</div>
   <script src="popup.js"></script>

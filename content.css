@@ -213,3 +213,71 @@
   cursor: pointer;
   accent-color: #da251d;
 }
+
+.ltv-qp-badge {
+  background: #7c3aed;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 8px;
+}
+
+.ltv-qp-hint {
+  font-size: 11px;
+  color: #999;
+  margin: 2px 0 6px;
+}
+
+.ltv-qp-btnrow {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.ltv-quick-popup button {
+  flex: 1;
+  padding: 5px 6px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: #2a2a2e;
+  color: #eee;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.ltv-quick-popup button:hover {
+  background: #3a3a40;
+}
+
+.ltv-quick-popup .ltv-qp-primary {
+  width: 100%;
+  margin-top: 6px;
+  background: #7c3aed;
+  border-color: #7c3aed;
+  color: #fff;
+  font-weight: 700;
+}
+
+.ltv-quick-popup .ltv-qp-primary:hover {
+  background: #6d28d9;
+}
+
+.ltv-quick-popup textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #141416;
+  color: #eee;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  font: 11px/1.5 "Segoe UI", Roboto, Arial, sans-serif;
+  resize: vertical;
+}
+
+.ltv-qp-status {
+  font-size: 11px;
+  color: #a5f3a5;
+  margin-top: 4px;
+  min-height: 14px;
+}

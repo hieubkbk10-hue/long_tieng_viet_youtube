@@ -199,3 +199,50 @@ function showStatus(r) {
 query('status');
 setInterval(() => query('status'), 1000);
 $('toggle').addEventListener('click', () => query('toggle'));
+
+const aiSay = (t) => { if ($('aiStatus')) $('aiStatus').textContent = t || ''; };
+
+function sendToTab(msg, cb) {
+  findActiveTab((tab) => {
+    if (!tab || !tab.id) { aiSay('Mở một video YouTube để dùng.'); return; }
+    chrome.tabs.sendMessage(tab.id, msg, (r) => {
+      if (chrome.runtime.lastError) { aiSay('Chưa kết nối tới video (F5 lại trang).'); return; }
+      cb && cb(r);
+    });
+  });
+}
+
+if ($('getPrompt')) $('getPrompt').addEventListener('click', () => {
+  aiSay('Đang lấy sub gốc…');
+  sendToTab({ type: 'getPrompt' }, (r) => {
+    if (!r || !r.orig) { aiSay('Video chưa có phụ đề để lấy (bật lồng tiếng 1 lần trước).'); return; }
+    const full = r.prompt + '\n\n--- KỊCH BẢN GỐC (' + r.count + ' dòng) ---\n' + r.orig;
+    navigator.clipboard.writeText(full).then(() => {
+      aiSay('Đã copy prompt + ' + r.count + ' dòng sub gốc. Dán vào Gemini/AI rồi dán kết quả vào ô dưới.');
+    }).catch(() => aiSay('Không copy được, thử lại.'));
+  });
+});
+
+if ($('useAi')) $('useAi').addEventListener('click', () => {
+  const raw = $('aiScript') ? $('aiScript').value : '';
+  if (!raw.trim()) { aiSay('Ô dán đang trống — hãy dán bản dịch AI vào.'); return; }
+  aiSay('Đang ép vào đúng nhịp video…');
+  sendToTab({ type: 'setCustom', raw }, (r) => {
+    if (r && r.ok) {
+      aiSay('Đang lồng bằng bản AI (' + r.count + ' dòng).');
+      if ($('aiBadge')) $('aiBadge').style.display = '';
+      query('status');
+    } else aiSay('Lỗi: ' + ((r && r.error) || 'không rõ'));
+  });
+});
+
+if ($('clearAi')) $('clearAi').addEventListener('click', () => {
+  sendToTab({ type: 'clearCustom' }, (r) => {
+    if (r && r.ok) {
+      if ($('aiScript')) $('aiScript').value = '';
+      if ($('aiBadge')) $('aiBadge').style.display = 'none';
+      aiSay('Đã xóa bản AI. Bật lại để dùng bản dịch tự động.');
+      query('status');
+    } else aiSay('Lỗi: ' + ((r && r.error) || 'không rõ'));
+  });
+});

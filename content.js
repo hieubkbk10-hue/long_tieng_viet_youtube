@@ -16,6 +16,117 @@
     smartFilter: true,  // Bỏ qua nhạc và tiếng động không lời
   };
   const CACHE_PREFIX = 'ltv1:';
+  const CUSTOM_PREFIX = 'ltvai:';
+  const PROMPT_DICH_HAY = `Bạn là biên dịch phim chuyên nghiệp (Việt Nam). Dịch kịch bản video sau sang TIẾNG VIỆT thật hay, tự nhiên như người Việt nói, đúng ngữ cảnh và thuật ngữ chuyên ngành.
+
+QUY TẮC BẮT BUỘC:
+1. Giữ NGUYÊN số dòng và thứ tự dòng — mỗi dòng gốc = đúng 1 dòng dịch. Không gộp, không tách, không thêm, không bớt dòng.
+2. Mỗi dòng dịch phải NGẮN GỌN, độ dài tương đương câu gốc để khi đọc lên khớp nhịp video (không dư/thiếu từ gây lệch tiếng).
+3. Từ chuyên ngành, tên riêng, thuật ngữ công nghệ: giữ nguyên tiếng Anh nếu người Việt hay dùng (ví dụ: AI, workflow, API, software), chỉ Việt hóa khi có từ tiếng Việt phổ biến hơn. Không dịch word-by-word gây ngô nghê.
+4. Văn nói tự nhiên, cảm xúc, hợp ngữ cảnh (hài thì hài, nghiêm túc thì nghiêm túc). Bỏ từ đệm thừa.
+5. Chỉ trả về ĐÚNG các dòng dịch, mỗi dòng một câu, không đánh số, không timestamp, không giải thích.`;
+
+  // Tách bản dán từ AI thành mảng câu, chấp nhận:文本 thuần mỗi dòng 1 câu,
+  // SRT, VTT (bỏ timestamp/đánh số, chỉ lấy chữ theo thứ tự).
+  function parseCustomScript(raw) {
+    const text = String(raw || '').replace(/\r/g, '').trim();
+    if (!text) return [];
+    const blocks = text.split(/\n\s*\n/);
+    const looksTimed = blocks.slice(0, 3).some((b) =>
+      /^\s*(?:WEBVTT|\d+\s*\n)?\s*\d{2}:\d{2}(?::\d{2})?[\s.,]*-->/.test(b));
+    if (looksTimed) {
+      const out = [];
+      for (const b of blocks) {
+        const lines = b.split('\n').map((s) => s.trim()).filter(Boolean);
+        const body = lines.filter((l) =>
+          !/^\d+$/.test(l) &&
+          !/^\d{2}:\d{2}(?::\d{2})?[\s.,]*-->/.test(l) &&
+          !/^WEBVTT/i.test(l) &&
+          !/^(NOTE|STYLE|REGION)/i.test(l));
+        const joined = body.join(' ').trim();
+        if (joined) out.push(joined);
+      }
+      if (out.length) return out;
+    }
+    return text.split('\n').map((l) => String(l || '')
+      .replace(/^[\s>#"'\-–*•]+/, '')
+      .replace(/^\d{1,4}\s*[.)\]:|\-–]+\s*/, '')
+      .replace(/^\[\s*\d{1,2}:\d{2}(?::\d{2})?\s*\]\s*/, '')
+      .replace(/^\(\s*\d{1,2}:\d{2}(?::\d{2})?\s*\)\s*/, '')
+      .trim()).filter((l) => l.length > 0);
+  }
+
+  // Ép chữ của AI vào đúng khung giờ gốc: phân phối theo THỜI LƯỢNG từng câu
+  // (câu dài được chia nhiều chữ hơn, câu ngắn ít chữ) nên nhịp đọc khớp video.
+  // Nếu số dòng dán ≈ số câu gốc (±15%): map 1-1 giữ nguyên nhịp tác giả.
+  // Lệch nhiều: gom nguyên dòng theo trọng số thời lượng; quá lệch thì reflow
+  // theo từ với ngân sách ký tự = thời lượng × tốc độ đọc để không bị nói nhanh.
+  function applyCustomToBase(base, lines) {
+    const N = base.length, M = lines.length;
+    if (!N || !M) return base;
+    if (N === M) return base.map((c, i) => ({ ...c, text: lines[i] }));
+    if (M >= N * 0.85 && M <= N * 1.15) {
+      // Gần bằng nhau: nội suy thứ tự, ưu tiên giữ câu tròn
+      return base.map((c, i) => {
+        const j = Math.round((i * (M - 1)) / Math.max(1, N - 1));
+        return { ...c, text: lines[clamp(j, 0, M - 1)] };
+      });
+    }
+    const durs = base.map((c) => Math.max(0.6, c.end - c.start));
+    const totalDur = durs.reduce((a, b) => a + b, 0) || N;
+    const totalChars = lines.join(' ').length || 1;
+    const CPS_TARGET = 15; // ký tự/giây tiếng Việt ở tốc độ chuẩn
+    const CPS_MAX = 30;    // trần khi đọc nhanh ×2
+    if (M > N) {
+      // Nhiều dòng dán hơn câu gốc: gom nguyên dòng theo tỉ trọng thời lượng
+      const out = [];
+      let li = 0;
+      const charsPerSec = totalChars / totalDur;
+      for (let i = 0; i < N; i++) {
+        const want = Math.max(1, Math.round((durs[i] / totalDur) * M));
+        let take = 0, chars = 0;
+        const budget = durs[i] * CPS_MAX;
+        while (li + take < M && take < want) { chars += lines[li + take].length + 1; take++; }
+        while (li + take < M && chars < durs[i] * Math.min(CPS_MAX, charsPerSec * 1.4) && chars + lines[li + take].length < budget * 1.2) {
+          chars += lines[li + take].length + 1; take++;
+        }
+        if (i === N - 1) take = M - li; // câu cuối gom hết phần dư
+        const t = lines.slice(li, li + Math.max(1, take)).join(' ').trim();
+        li += Math.max(1, take);
+        out.push({ ...base[i], text: t || lines[Math.min(M - 1, li - 1)] });
+        if (li >= M) {
+          for (let j = i + 1; j < N; j++) out.push({ ...base[j], text: '' });
+          break;
+        }
+      }
+      return out.filter((c) => c.text);
+    }
+    // Ít dòng dán hơn câu gốc: reflow theo từ, mỗi câu nhận đúng ngân sách nói được
+    const words = lines.join(' ').split(/\s+/).filter(Boolean);
+    let wi = 0;
+    return base.map((c, i) => {
+      const budget = Math.max(8, Math.floor(durs[i] * CPS_TARGET * 1.35));
+      let t = '';
+      while (wi < words.length) {
+        const w = words[wi];
+        if ((t + ' ' + w).trim().length > budget && t) break;
+        t = (t + ' ' + w).trim();
+        wi++;
+        if (/[.!?…:;]$/.test(w)) break; // ngắt ở dấu câu cho tròn nhịp
+      }
+      if (!t && wi < words.length) { t = words[wi++]; } // từ đơn quá dài vẫn lấy
+      if (i === N - 1 && wi < words.length) t = (t + ' ' + words.slice(wi).join(' ')).trim();
+      return { ...c, text: t };
+    }).filter((c) => c.text);
+  }
+
+  async function customGet(id) {
+    try {
+      const r = await chrome.storage.local.get(CUSTOM_PREFIX + id);
+      const v = r[CUSTOM_PREFIX + id];
+      return (v && v.raw) || '';
+    } catch { return ''; }
+  }
   const VI = /^vi([-_]|$)/i;
   const NOISE_PATTERN = /^(?:\[.*?\]|\(.*?\)|[♪♫\s\-_.,!?]+)$/i;
   const MUSIC_WORDS = /^(?:music|applause|laughter|cheering|gasp|sigh|chuckle|tiếng nhạc|âm nhạc|vỗ tay|tiếng cười|nhạc)$/i;
@@ -247,9 +358,15 @@
   }
 
   async function loadCues(videoId, token) {
+    const customRaw = await customGet(videoId);
+    const customLines = parseCustomScript(customRaw);
+    const customHash = customLines.length ? String(customLines.join('\n').length) + ':' + customLines.length : '';
     const cached = await cacheGet(videoId);
-    if (cached) return cached;
-    status('Đang lấy phụ đề…');
+    if (cached && !customLines.length && !cached.custom) return cached.cues || cached;
+    if (cached && cached.custom && customLines.length && cached.hash === customHash) {
+      st.customActive = true;
+      return cached.cues;
+    }
     let info = null;
     for (let i = 0; i < 25 && token === st.loadToken; i++) {
       const r = await pageCall('getTracks');
@@ -294,6 +411,20 @@
       }
     }
     if (!cues.length) throw new Error('Phụ đề trống.');
+    if (customLines.length) {
+      const mapped = applyCustomToBase(cues, customLines);
+      if (!mapped.length) throw new Error('Kịch bản dán vào trống.');
+      st.customActive = true;
+      try {
+        await chrome.storage.local.set({ [CACHE_PREFIX + videoId]: { t: Date.now(), cues: mapped, custom: true, hash: customHash } });
+      } catch {}
+      const basePlain = cues.map((c) => c.text).join('\n');
+      try {
+        await chrome.storage.local.set({ ['ltvorig:' + videoId]: { t: Date.now(), text: basePlain } });
+      } catch {}
+      return mapped;
+    }
+    st.customActive = false;
     cacheSet(videoId, cues);
     return cues;
   }
@@ -302,7 +433,7 @@
     try {
       const k = CACHE_PREFIX + id;
       const r = await chrome.storage.local.get(k);
-      return (r[k] && r[k].cues) || null;
+      return r[k] || null;
     } catch { return null; }
   }
 
@@ -594,6 +725,7 @@
     stop(true);
     st.videoId = vid;
     st.isVietnamese = false;
+    st.customActive = false;
     st.cues = [];
     st.nextIdx = 0;
     st.loadToken++;
@@ -639,7 +771,7 @@
       const vv = getVideo();
       st.nextIdx = vv ? findIdx(vv.currentTime) : 0;
       if (!pickVoice()) cues.slice(st.nextIdx, st.nextIdx + 2).forEach((c) => AudioTTS.prefetch(c.text, S.rate, S.pitch || 0));
-      toast(`Lồng tiếng Việt: BẬT (${cues.length} câu)`);
+      toast(`Lồng tiếng Việt: BẬT (${cues.length} câu${st.customActive ? ' — bản AI' : ''})`);
     } catch (e) {
       if (e === cancelled || token !== st.loadToken) return;
       toast(e.message, 6000);
@@ -709,6 +841,19 @@
         <label class="ltv-qp-check">
           <input type="checkbox" id="ltv-qp-subs" ${S.showSubs ? 'checked' : ''}> Hiện phụ đề tiếng Việt
         </label>
+
+        <hr class="ltv-qp-divider">
+        <div class="ltv-qp-row">
+          <label>Kịch bản AI riêng <span id="ltv-qp-ai-badge" class="ltv-qp-badge" style="display:none">AI</span></label>
+        </div>
+        <div class="ltv-qp-hint">Bấm <b>Lấy prompt + sub gốc</b> → dán vào Gemini/ChatGPT → dán kết quả xuống dưới → <b>Dùng bản AI</b>.</div>
+        <div class="ltv-qp-btnrow">
+          <button type="button" id="ltv-qp-prompt">Lấy prompt + sub gốc</button>
+          <button type="button" id="ltv-qp-clear">Xóa bản AI</button>
+        </div>
+        <textarea id="ltv-qp-script" rows="5" placeholder="Dán bản dịch AI vào đây (mỗi dòng 1 câu, hoặc SRT/VTT đều được)…"></textarea>
+        <button type="button" id="ltv-qp-apply" class="ltv-qp-primary">Dùng bản AI này lồng tiếng</button>
+        <div class="ltv-qp-status" id="ltv-qp-ai-status"></div>
       </div>
     `;
 
@@ -763,6 +908,79 @@
       if (!S.showSubs) setSub('');
     });
 
+    const aiBox = qp.querySelector('#ltv-qp-script');
+    const aiStatus = qp.querySelector('#ltv-qp-ai-status');
+    const aiBadge = qp.querySelector('#ltv-qp-ai-badge');
+    const aiSay = (t) => { if (aiStatus) aiStatus.textContent = t || ''; };
+    const refreshBadge = () => {
+      customGet(st.videoId || currentVideoId() || '').then((raw) => {
+        if (aiBadge) aiBadge.style.display = raw ? '' : 'none';
+      }).catch(() => {});
+    };
+
+    qp.querySelector('#ltv-qp-prompt').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      aiSay('Đang lấy sub gốc…');
+      try {
+        const vid = st.videoId || currentVideoId();
+        if (!vid) { aiSay('Hãy mở một video trước.'); return; }
+        let orig = '';
+        try {
+          const o = await chrome.storage.local.get('ltvorig:' + vid);
+          orig = (o['ltvorig:' + vid] && o['ltvorig:' + vid].text) || '';
+        } catch {}
+        if (!orig) {
+          if (st.cues.length && !st.customActive) orig = st.cues.map((c) => c.text).join('\n');
+          else {
+            status('Đang lấy sub gốc…');
+            const cues = await loadCues(vid, st.loadToken);
+            orig = cues.map((c) => c.text).join('\n');
+            st.cues = cues; st.customActive = false;
+          }
+        }
+        const full = PROMPT_DICH_HAY + '\n\n--- KỊCH BẢN GỐC (' + orig.split('\n').length + ' dòng) ---\n' + orig;
+        await navigator.clipboard.writeText(full).catch(async () => {
+          const ta = document.createElement('textarea');
+          ta.value = full; document.body.appendChild(ta); ta.select();
+          document.execCommand('copy'); ta.remove();
+        });
+        aiSay('Đã copy prompt + ' + orig.split('\n').length + ' dòng sub gốc. Dán vào Gemini/AI rồi dán kết quả xuống dưới.');
+        toast('Đã copy prompt + sub gốc — dán vào Gemini/AI nhé.');
+      } catch (err) { aiSay('Lỗi: ' + (err.message || err)); }
+    });
+
+    qp.querySelector('#ltv-qp-clear').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const vid = st.videoId || currentVideoId();
+      if (!vid) return;
+      await chrome.storage.local.remove([CUSTOM_PREFIX + vid, CACHE_PREFIX + vid]);
+      if (aiBox) aiBox.value = '';
+      st.cues = []; st.customActive = false; st.loadToken++;
+      AudioTTS.clear(); stop(true);
+      aiSay('Đã xóa bản AI. Bật lại để dùng bản dịch tự động.');
+      refreshBadge();
+    });
+
+    qp.querySelector('#ltv-qp-apply').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const vid = st.videoId || currentVideoId();
+      const lines = parseCustomScript(aiBox ? aiBox.value : '');
+      if (!vid) { aiSay('Hãy mở một video trước.'); return; }
+      if (!lines.length) { aiSay('Ô dán đang trống — hãy dán bản dịch AI vào.'); return; }
+      aiSay('Đã nhận ' + lines.length + ' dòng. Đang ép vào đúng nhịp video…');
+      try {
+        await chrome.storage.local.set({ [CUSTOM_PREFIX + vid]: { t: Date.now(), raw: aiBox.value } });
+        await chrome.storage.local.remove(CACHE_PREFIX + vid);
+        st.cues = []; st.loadToken++;
+        AudioTTS.clear(); stop(true); refreshBadge();
+        await start();
+        aiSay('Đang lồng bằng bản AI (' + lines.length + ' dòng).');
+      } catch (err) { aiSay('Lỗi: ' + (err.message || err)); }
+    });
+
+    qp.addEventListener('click', (e) => e.stopPropagation());
+    qp.querySelector('#ltv-qp-script').addEventListener('click', (e) => e.stopPropagation());
+
     document.addEventListener('click', (e) => {
       if (!qp.contains(e.target) && !e.target.closest('.ltv-btn')) {
         qp.classList.remove('show');
@@ -777,6 +995,19 @@
     if (qp.classList.contains('show')) {
       qp.classList.remove('show');
       return;
+    }
+    {
+      const vid = st.videoId || currentVideoId() || '';
+      const box = qp.querySelector('#ltv-qp-script');
+      const badge = qp.querySelector('#ltv-qp-ai-badge');
+      const say = qp.querySelector('#ltv-qp-ai-status');
+      if (say) say.textContent = '';
+      if (box && vid) {
+        customGet(vid).then((raw) => {
+          if (document.activeElement !== box) box.value = raw || '';
+          if (badge) badge.style.display = raw ? '' : 'none';
+        }).catch(() => {});
+      }
     }
 
     const rect = btnEl.getBoundingClientRect();
@@ -882,10 +1113,59 @@
     toggle();
   }, true);
 
+  async function clearCustomScript(vid) {
+    if (!vid) return { ok: false, error: 'Hãy mở một video trước.' };
+    await chrome.storage.local.remove([CUSTOM_PREFIX + vid, CACHE_PREFIX + vid]);
+    st.cues = []; st.customActive = false; st.loadToken++;
+    AudioTTS.clear(); stop(true);
+    return { ok: true };
+  }
+
+  async function getOrigText(vid) {
+    if (!vid) return { text: '', count: 0 };
+    try {
+      const o = await chrome.storage.local.get('ltvorig:' + vid);
+      const t = (o['ltvorig:' + vid] && o['ltvorig:' + vid].text) || '';
+      if (t) return { text: t, count: t.split('\n').length };
+    } catch {}
+    if (st.cues.length && !st.customActive) {
+      return { text: st.cues.map((c) => c.text).join('\n'), count: st.cues.length };
+    }
+    return { text: '', count: 0 };
+  }
+
+  function getPromptFull(orig, count) {
+    return PROMPT_DICH_HAY + '\n\n--- KỊCH BẢN GỐC (' + count + ' dòng) ---\n' + orig;
+  }
+
+  async function setCustomScript(vid, raw) {
+    if (!vid) return { ok: false, error: 'Hãy mở một video trước.' };
+    const lines = parseCustomScript(raw);
+    if (!lines.length) return { ok: false, error: 'Bản dán đang trống.' };
+    await chrome.storage.local.set({ [CUSTOM_PREFIX + vid]: { t: Date.now(), raw } });
+    await chrome.storage.local.remove(CACHE_PREFIX + vid);
+    st.cues = []; st.loadToken++;
+    AudioTTS.clear(); stop(true);
+    await start();
+    return { ok: true, count: lines.length };
+  }
+
   chrome.runtime.onMessage.addListener((m, _s, send) => {
     const currentVid = currentVideoId();
     if (currentVid) st.videoId = currentVid;
     if (m.type === 'toggle') toggle();
+    if (m.type === 'getPrompt') {
+      getOrigText(st.videoId || currentVideoId()).then((r) => send({ prompt: PROMPT_DICH_HAY, orig: r.text, count: r.count, hasCustom: !!st.customActive }));
+      return true;
+    }
+    if (m.type === 'setCustom') {
+      setCustomScript(st.videoId || currentVideoId(), m.raw || '').then((r) => send(r));
+      return true;
+    }
+    if (m.type === 'clearCustom') {
+      clearCustomScript(st.videoId || currentVideoId()).then((r) => send(r));
+      return true;
+    }
     if (m.type === 'toggle' || m.type === 'status') {
       send({
         videoId: st.videoId || currentVid,
@@ -893,7 +1173,8 @@
         loading: st.loading,
         isVietnamese: st.isVietnamese,
         count: st.cues.length,
-        voice: currentVoiceName()
+        custom: !!st.customActive,
+        voice: currentVoiceName() + (st.customActive ? ' · bản AI' : '')
       });
     }
   });
