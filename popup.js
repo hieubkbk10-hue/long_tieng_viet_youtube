@@ -124,10 +124,56 @@ $('test').addEventListener('click', () => {
   });
 });
 
+function findActiveTab(callback) {
+  // 1. Thử query với lastFocusedWindow: true (tương thích cả Chrome và Edge)
+  chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
+    if (tabs && tabs.length && tabs[0].id) {
+      return callback(tabs[0]);
+    }
+    // 2. Thử query với currentWindow: true (fallback)
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs2) => {
+      if (tabs2 && tabs2.length && tabs2[0].id) {
+        return callback(tabs2[0]);
+      }
+      // 3. Fallback: tìm tab active bất kỳ đang mở YouTube
+      chrome.tabs.query({ active: true }, (tabs3) => {
+        const yt = (tabs3 || []).find((t) => t.url && t.url.includes('youtube.com'));
+        callback(yt || (tabs3 && tabs3[0]) || null);
+      });
+    });
+  });
+}
+
+let activeTabId = null;
+
+function query(type) {
+  findActiveTab((tab) => {
+    if (!tab || !tab.id) {
+      showStatus(null);
+      return;
+    }
+    activeTabId = tab.id;
+    chrome.tabs.sendMessage(activeTabId, { type }, (r) => {
+      if (chrome.runtime.lastError) {
+        showStatus(null);
+        return;
+      }
+      showStatus(r);
+    });
+  });
+}
+
 function showStatus(r) {
   const btn = $('toggle');
-  if (!r || !r.videoId) {
-    btn.disabled = true;
+  if (!r) {
+    btn.disabled = false;
+    btn.className = 'off';
+    btn.textContent = 'Bật lồng tiếng video này';
+    $('status').textContent = 'Chưa kết nối tới video (F5 lại trang YouTube nếu vừa cài lại extension).';
+    return;
+  }
+  if (!r.videoId) {
+    btn.disabled = false;
     btn.className = 'off';
     btn.textContent = 'Bật lồng tiếng video này';
     $('status').textContent = 'Mở một video YouTube để dùng.';
@@ -150,18 +196,6 @@ function showStatus(r) {
   }
 }
 
-let tabId = null;
-function query(type) {
-  if (tabId == null) return showStatus(null);
-  chrome.tabs.sendMessage(tabId, { type }, (r) => {
-    if (chrome.runtime.lastError) return showStatus(null);
-    showStatus(r);
-  });
-}
-
-chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-  tabId = tabs[0] ? tabs[0].id : null;
-  query('status');
-  setInterval(() => query('status'), 1000);
-});
+query('status');
+setInterval(() => query('status'), 1000);
 $('toggle').addEventListener('click', () => query('toggle'));

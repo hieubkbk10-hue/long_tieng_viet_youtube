@@ -17,7 +17,6 @@
   };
   const CACHE_PREFIX = 'ltv1:';
   const VI = /^vi([-_]|$)/i;
-  const VI_CHARS = /[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]/i;
   const NOISE_PATTERN = /^(?:\[.*?\]|\(.*?\)|[♪♫\s\-_.,!?]+)$/i;
   const MUSIC_WORDS = /^(?:music|applause|laughter|cheering|gasp|sigh|chuckle|tiếng nhạc|âm nhạc|vỗ tay|tiếng cười|nhạc)$/i;
 
@@ -32,10 +31,10 @@
     cues: [], nextIdx: 0,
     speaking: false, speakToken: 0, speakDeadline: 0,
     video: null, base: null, factor: 1, lastSetVol: -1,
-    cps: { web: 15, google: 14 }, // ký tự/giây ở tốc độ 1, tự hiệu chỉnh
+    cps: { web: 15, google: 14 },
   };
 
-  // ---------- Giao tiếp với trang ----------
+  // ---------- Giao tiếp với trang (MAIN world) ----------
   function pageCall(type, extra) {
     return new Promise((resolve) => {
       const id = Math.random().toString(36).slice(2);
@@ -46,22 +45,18 @@
       };
       window.addEventListener('message', h);
       window.postMessage({ source: 'ltv-content', type, id, ...extra }, '*');
-      setTimeout(() => { window.removeEventListener('message', h); resolve(null); }, 2000);
+      setTimeout(() => { window.removeEventListener('message', h); resolve(null); }, 1500);
     });
   }
 
   // Đảm bảo inject.js chạy trong Main world ở cả Chrome và Edge
-  async function ensureInjected() {
+  function ensureInjected() {
+    if (document.getElementById('ltv-injected-script')) return;
     try {
-      const pong = await pageCall('ping');
-      if (pong !== null && pong !== undefined) return;
-      const scriptUrl = chrome.runtime.getURL('inject.js');
-      if (!document.querySelector(`script[src="${scriptUrl}"]`)) {
-        const s = document.createElement('script');
-        s.src = scriptUrl;
-        s.onload = () => s.remove();
-        (document.head || document.documentElement).appendChild(s);
-      }
+      const s = document.createElement('script');
+      s.id = 'ltv-injected-script';
+      s.src = chrome.runtime.getURL('inject.js');
+      (document.head || document.documentElement).appendChild(s);
     } catch {}
   }
 
@@ -82,7 +77,7 @@
     try {
       let info = cachedInfo;
       if (!info) {
-        for (let i = 0; i < 12; i++) {
+        for (let i = 0; i < 4; i++) {
           const r = await pageCall('getTracks');
           if (r && (!videoId || r.videoId === videoId || !r.videoId)) {
             info = r;
@@ -95,7 +90,7 @@
       if (!info) {
         const title = document.title || '';
         const viChars = (title.match(/[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]/gi) || []).length;
-        return viChars >= 4;
+        return viChars >= 3;
       }
 
       // Lớp 1: Ngôn ngữ âm thanh gốc (defaultAudioLanguage)
@@ -157,7 +152,6 @@
     return u.href;
   }
 
-  // YouTube yêu cầu token trong URL phụ đề: bật CC thoáng qua để trình phát tự tải, rồi mượn URL đó
   async function captureUrl(videoId) {
     const get = () => pageCall('getCaptured', { videoId });
     let url = await get();
@@ -168,7 +162,7 @@
     const wasOn = btn.getAttribute('aria-pressed') === 'true';
     btn.click();
     if (wasOn) { await sleep(300); btn.click(); }
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < 20; i++) {
       await sleep(200);
       url = await get();
       if (url && url.includes('pot=')) break;
@@ -183,11 +177,10 @@
       const rawText = ev.segs.map((s) => s.utf8 || '').join('').trim();
       if (!rawText) continue;
 
-      // Bộ lọc âm thanh/nhạc không lời thông minh
       const cleanSound = rawText.replace(/[\[\]\(\)♪♫]/g, '').trim();
       const isNoise = !cleanSound || MUSIC_WORDS.test(cleanSound) || NOISE_PATTERN.test(rawText);
       if (isNoise && S.smartFilter) {
-        continue; // Bỏ qua đoạn nhạc/vỗ tay để giữ trọn vẹn âm gốc
+        continue;
       }
 
       const text = rawText
@@ -207,7 +200,6 @@
     return out.filter((c, i) => i === 0 || c.text !== out[i - 1].text);
   }
 
-  // Gộp các mảnh phụ đề thành câu hoàn chỉnh để dịch tự nhiên và đọc liền mạch
   function mergeCues(cues, isAsr) {
     const maxChars = isAsr ? 140 : 200, maxDur = isAsr ? 7 : 10, maxGap = isAsr ? 0.9 : 1.2;
     const out = [];
@@ -296,7 +288,6 @@
         cues = await translateCues(mergeCues(parseEvents(events), isAsr), token);
       } catch (e) {
         if (e === cancelled) throw e;
-        // Dự phòng: bản dịch tự động của chính YouTube
         const vi = await fetchEvents(url, 'vi');
         if (!vi) throw new Error('Không dịch được phụ đề: ' + e.message);
         cues = mergeCues(parseEvents(vi), isAsr);
@@ -325,8 +316,6 @@
   }
 
   // ---------- Giọng đọc ----------
-  // Cả Chrome & Edge đều ưu tiên Microsoft Azure Neural TTS (Hoài My & Nam Minh) qua Background Audio
-  // để đảm bảo 100% chất lượng cao, không bao giờ bị dính bug WebSpeech trên Edge
   let voices = [];
   const loadVoices = () => { voices = speechSynthesis.getVoices().filter((v) => VI.test(v.lang)); };
   loadVoices();
@@ -423,7 +412,6 @@
           await new Promise((res) => {
             const a = new Audio(urls[i]);
             a.preservesPitch = true;
-            // Tốc độ đã được SSML Microsoft tổng hợp tự nhiên, giữ playbackRate ổn định
             a.playbackRate = 1.0;
             a.volume = volume;
             this.audio = a;
@@ -451,7 +439,6 @@
       this.cache.clear();
     },
   };
-  const GoogleTTS = AudioTTS;
 
   // ---------- Đồng bộ lời đọc với video ----------
   function findIdx(t) {
@@ -470,7 +457,6 @@
     const voice = pickVoice();
     const kind = voice ? 'web' : 'google';
 
-    // Đọc nhanh hơn nếu câu dài so với khoảng thời gian và đồng bộ tự động theo tốc độ video
     const need = cue.text.length / st.cps[kind] / avail;
     const rate = clamp(Math.max(S.rate * playbackRate, need), 0.5, 2.0);
     const token = ++st.speakToken;
@@ -543,8 +529,8 @@
     });
     v.addEventListener('volumechange', () => {
       if (!st.active || st.base == null) return;
-      if (Math.abs(v.volume - st.lastSetVol) < 0.003) return; // do extension tự điều chỉnh
-      st.base = v.volume; // người dùng chủ động chỉnh âm lượng
+      if (Math.abs(v.volume - st.lastSetVol) < 0.003) return;
+      st.base = v.volume;
       st.lastSetVol = -1;
       applyVol();
     });
@@ -567,6 +553,7 @@
   };
 
   function tick() {
+    ensureInjected();
     ensureButton();
     const vid = currentVideoId();
     if (vid !== st.videoId) {
@@ -582,7 +569,6 @@
     const ad = !!document.querySelector('#movie_player.ad-showing');
     if (ad && st.speaking) stopSpeech();
 
-    // Smooth Ducking: hạ âm nhanh (0.08), trả lại âm lượng từ từ (0.03) để mượt mà
     const target = ad ? 1 : st.speaking ? S.duckSpeaking : S.duckGap;
     const step = target < st.factor ? 0.08 : 0.03;
     st.factor += clamp(target - st.factor, -step, step);
@@ -612,9 +598,9 @@
     st.nextIdx = 0;
     st.loadToken++;
     AudioTTS.clear();
+    updateButton();
     if (!vid) return;
 
-    // Kiểm tra tự động xem video có phải là tiếng Việt sẵn không
     if (S.skipVietnamese) {
       const isVi = await checkIsVietnamese(vid);
       if (isVi) {
@@ -629,8 +615,9 @@
   }
 
   async function start() {
-    const vid = st.videoId;
+    const vid = st.videoId || currentVideoId();
     if (!vid) { toast('Hãy mở một video YouTube trước.'); return; }
+    st.videoId = vid;
     st.active = true;
     blockedWarned = false;
     const v = getVideo();
@@ -776,7 +763,6 @@
       if (!S.showSubs) setSub('');
     });
 
-    // Bấm ra ngoài để đóng quick popup
     document.addEventListener('click', (e) => {
       if (!qp.contains(e.target) && !e.target.closest('.ltv-btn')) {
         qp.classList.remove('show');
@@ -802,7 +788,8 @@
   function ensureButton() {
     const ctr = document.querySelector('#movie_player .ytp-right-controls') ||
       document.querySelector('.ytp-right-controls') ||
-      document.querySelector('.ytp-chrome-controls .ytp-right-controls');
+      document.querySelector('.ytp-chrome-controls .ytp-right-controls') ||
+      document.querySelector('#player-control-container .ytp-right-controls');
     if (!ctr || ctr.querySelector('.ltv-btn')) return;
 
     const b = document.createElement('button');
@@ -896,10 +883,12 @@
   }, true);
 
   chrome.runtime.onMessage.addListener((m, _s, send) => {
+    const currentVid = currentVideoId();
+    if (currentVid) st.videoId = currentVid;
     if (m.type === 'toggle') toggle();
     if (m.type === 'toggle' || m.type === 'status') {
       send({
-        videoId: st.videoId,
+        videoId: st.videoId || currentVid,
         active: st.active,
         loading: st.loading,
         isVietnamese: st.isVietnamese,
@@ -917,10 +906,31 @@
     updateButton();
   });
 
+  // Khởi động tức thì, không bị chặn bởi storage sync
   ensureInjected();
+  ensureButton();
+  tick();
+  setInterval(tick, 100);
 
+  // Lắng nghe các sự kiện điều hướng của YouTube (SPA)
+  window.addEventListener('DOMContentLoaded', () => {
+    ensureInjected();
+    ensureButton();
+  });
+  window.addEventListener('load', () => {
+    ensureInjected();
+    ensureButton();
+  });
+  window.addEventListener('yt-navigate-finish', () => {
+    ensureInjected();
+    ensureButton();
+    const vid = currentVideoId();
+    if (vid !== st.videoId) onVideoChange(vid);
+  });
+
+  // Tải cài đặt lưu trữ ngầm
   chrome.storage.sync.get(DEFAULTS, (v) => {
-    S = { ...DEFAULTS, ...v };
-    setInterval(tick, 100);
+    if (v) S = { ...DEFAULTS, ...v };
+    updateButton();
   });
 })();
