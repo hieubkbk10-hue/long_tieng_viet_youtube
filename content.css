@@ -3,9 +3,12 @@
   align-items: center;
   justify-content: center;
   width: auto !important;
-  padding: 0 6px !important;
+  padding: 0 4px !important;
   vertical-align: top;
+  gap: 3px;
+  cursor: pointer;
 }
+
 .ltv-pill {
   font: 700 12px/1 Roboto, Arial, sans-serif;
   color: #fff;
@@ -14,16 +17,47 @@
   padding: 3px 5px;
   letter-spacing: .5px;
   transition: background .2s, border-color .2s, color .2s;
+  white-space: nowrap;
 }
+
+.ltv-gear {
+  font-size: 13px;
+  opacity: 0.65;
+  transition: opacity .2s, transform .2s;
+  padding: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+}
+
+.ltv-btn:hover .ltv-gear {
+  opacity: 1;
+  transform: rotate(45deg);
+}
+
 .ltv-btn.on .ltv-pill {
   background: #da251d;
   border-color: #ffcd00;
   color: #ffcd00;
 }
+
+.ltv-btn.on .ltv-gear {
+  opacity: 0.9;
+  color: #ffcd00;
+}
+
 .ltv-btn.loading .ltv-pill {
   border-color: #ffcd00;
   animation: ltv-blink 1s infinite;
 }
+
+.ltv-btn.is-vi .ltv-pill {
+  border-color: rgba(76, 175, 80, 0.7);
+  color: #81c784;
+  background: rgba(46, 125, 50, 0.2);
+}
+
 @keyframes ltv-blink { 50% { opacity: .35; } }
 
 .ltv-toast {
@@ -34,12 +68,13 @@
   max-width: 70%;
   padding: 8px 14px;
   border-radius: 8px;
-  background: rgba(0, 0, 0, .78);
+  background: rgba(0, 0, 0, .85);
   color: #fff;
   font: 500 14px/1.4 Roboto, Arial, sans-serif;
   opacity: 0;
   pointer-events: none;
   transition: opacity .25s;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
 }
 .ltv-toast.show { opacity: 1; }
 
@@ -50,13 +85,131 @@
   z-index: 69;
   transform: translateX(-50%);
   max-width: 82%;
-  padding: 6px 12px;
+  padding: 6px 14px;
   border-radius: 6px;
-  background: rgba(0, 0, 0, .72);
+  background: rgba(0, 0, 0, .78);
   color: #ffe866;
   font: 500 19px/1.4 Roboto, Arial, sans-serif;
   text-align: center;
   display: none;
   pointer-events: none;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.9);
 }
 .ltv-sub.show { display: block; }
+
+/* Quick Control Popover */
+.ltv-quick-popup {
+  position: fixed;
+  z-index: 999999;
+  width: 250px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(24, 24, 27, 0.96);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #f1f1f1;
+  font: 12px/1.4 "Segoe UI", Roboto, Arial, sans-serif;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+  opacity: 0;
+  transform: scale(0.95);
+  pointer-events: none;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.ltv-quick-popup.show {
+  opacity: 1;
+  transform: scale(1);
+  pointer-events: auto;
+}
+
+.ltv-qp-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.ltv-qp-title {
+  font-weight: 700;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ltv-flag {
+  color: #ffcd00;
+  background: #da251d;
+  padding: 1px 4px;
+  border-radius: 2px;
+  font-size: 10px;
+}
+
+.ltv-qp-close {
+  background: transparent;
+  border: 0;
+  color: #888;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.ltv-qp-close:hover { color: #fff; }
+
+.ltv-qp-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 6px;
+  margin-bottom: 2px;
+  font-size: 11px;
+  color: #aaa;
+}
+
+.ltv-qp-val {
+  color: #ffcd00;
+  font-weight: 600;
+}
+
+.ltv-quick-popup input[type="range"] {
+  width: 100%;
+  margin: 2px 0 6px;
+  height: 4px;
+  accent-color: #da251d;
+  cursor: pointer;
+}
+
+.ltv-quick-popup select {
+  width: 100%;
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: #2a2a2e;
+  color: #eee;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  margin-bottom: 6px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.ltv-qp-divider {
+  border: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  margin: 6px 0;
+}
+
+.ltv-qp-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 11px;
+  color: #ccc;
+  cursor: pointer;
+  user-select: none;
+}
+
+.ltv-qp-check input[type="checkbox"] {
+  cursor: pointer;
+  accent-color: #da251d;
+}

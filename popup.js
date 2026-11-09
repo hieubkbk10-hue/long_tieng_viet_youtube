@@ -1,11 +1,14 @@
 const DEFAULTS = {
   autoStart: true,
+  skipVietnamese: true,
   voice: '',
+  pitch: 0,
   rate: 1.1,
   duckSpeaking: 0.15,
   duckGap: 0.4,
   dubVolume: 1,
   showSubs: false,
+  smartFilter: true,
 };
 const VI = /^vi([-_]|$)/i;
 const $ = (id) => document.getElementById(id);
@@ -17,7 +20,10 @@ const fmt = {
 };
 let settings = { ...DEFAULTS };
 
-const save = (k, v) => { settings[k] = v; chrome.storage.sync.set({ [k]: v }); };
+const save = (k, v) => {
+  settings[k] = v;
+  chrome.storage.sync.set({ [k]: v });
+};
 
 function viVoices() {
   return speechSynthesis.getVoices().filter((v) => VI.test(v.lang));
@@ -32,16 +38,17 @@ function fillVoices() {
     o.textContent = label;
     sel.appendChild(o);
   };
-  const vs = viVoices();
-  const best = vs.find((v) => /natural|online/i.test(v.name));
-  add('', 'Tự động' + (best ? ' (' + best.name.replace(/^Microsoft\s+/, '').replace(/\s+-.*$/, '') + ')' : ' (Hoài My - Tự nhiên)'));
-  add('ms-hoaimy', 'Microsoft Hoài My (Tự nhiên - Nữ)');
+
+  add('', 'Microsoft Hoài My (Tự nhiên - Nữ)');
   add('ms-namminh', 'Microsoft Nam Minh (Tự nhiên - Nam)');
+
+  const vs = viVoices();
   vs.forEach((v) => {
     if (!/hoaimy|namminh/i.test(v.name)) {
       add(v.name, v.name);
     }
   });
+
   add('google', 'Google Dịch (Dự phòng)');
   sel.value = settings.voice;
   if (sel.value !== settings.voice) sel.value = '';
@@ -49,62 +56,71 @@ function fillVoices() {
 
 function render() {
   $('autoStart').checked = settings.autoStart;
+  $('skipVietnamese').checked = settings.skipVietnamese;
+  $('smartFilter').checked = settings.smartFilter;
   $('showSubs').checked = settings.showSubs;
+  $('pitch').value = String(settings.pitch ?? 0);
+
   for (const k of Object.keys(fmt)) {
-    $(k).value = settings[k];
-    $(k + 'Val').textContent = fmt[k](settings[k]);
+    if ($(k) && $(k + 'Val')) {
+      $(k).value = settings[k];
+      $(k + 'Val').textContent = fmt[k](settings[k]);
+    }
   }
   fillVoices();
 }
 
-chrome.storage.sync.get(DEFAULTS, (s) => { settings = { ...DEFAULTS, ...s }; render(); });
+chrome.storage.sync.get(DEFAULTS, (s) => {
+  settings = { ...DEFAULTS, ...s };
+  render();
+});
 speechSynthesis.addEventListener('voiceschanged', fillVoices);
 
-['autoStart', 'showSubs'].forEach((k) => $(k).addEventListener('change', (e) => save(k, e.target.checked)));
-Object.keys(fmt).forEach((k) => $(k).addEventListener('input', (e) => {
-  const v = Number(e.target.value);
-  $(k + 'Val').textContent = fmt[k](v);
-  save(k, v);
-}));
+['autoStart', 'skipVietnamese', 'smartFilter', 'showSubs'].forEach((k) => {
+  if ($(k)) $(k).addEventListener('change', (e) => save(k, e.target.checked));
+});
+
+Object.keys(fmt).forEach((k) => {
+  if ($(k)) {
+    $(k).addEventListener('input', (e) => {
+      const v = Number(e.target.value);
+      $(k + 'Val').textContent = fmt[k](v);
+      save(k, v);
+    });
+  }
+});
+
 $('voice').addEventListener('change', (e) => save('voice', e.target.value));
+$('pitch').addEventListener('change', (e) => save('pitch', Number(e.target.value)));
 
+let testAudio = null;
 $('test').addEventListener('click', () => {
-  const text = 'Xin chào, đây là giọng lồng tiếng Việt cho video YouTube của bạn.';
-  const vs = viVoices();
-  const vSetting = settings.voice;
+  const text = 'Xin chào, đây là giọng lồng tiếng Việt chuẩn cho video YouTube của bạn.';
+  const btn = $('test');
+  btn.textContent = '⏳ Đang tải...';
 
-  // 1. Giọng cụ thể của trình duyệt/Windows được chọn rõ ràng
-  if (vSetting && vSetting !== 'google' && vSetting !== 'ms-hoaimy' && vSetting !== 'ms-namminh') {
-    const voice = vs.find((v) => v.name === vSetting);
-    if (voice) {
-      speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance(text);
-      u.voice = voice; u.lang = voice.lang; u.rate = settings.rate; u.volume = settings.dubVolume;
-      speechSynthesis.speak(u);
-      return;
-    }
+  if (testAudio) {
+    testAudio.pause();
+    testAudio = null;
   }
 
-  // 2. Chế độ Tự động trên Edge có sẵn giọng WebSpeech Natural
-  if (!vSetting) {
-    const naturalVoice = vs.find((v) => /natural|online/i.test(v.name));
-    if (naturalVoice) {
-      speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance(text);
-      u.voice = naturalVoice; u.lang = naturalVoice.lang; u.rate = settings.rate; u.volume = settings.dubVolume;
-      speechSynthesis.speak(u);
+  chrome.runtime.sendMessage({
+    type: 'tts',
+    text,
+    voice: settings.voice,
+    rate: settings.rate,
+    pitch: settings.pitch
+  }, (r) => {
+    btn.textContent = '▶ Nghe thử giọng';
+    if (!r || !r.ok) {
+      alert('Không phát được âm thanh: ' + ((r && r.error) || 'Lỗi kết nối'));
       return;
     }
-  }
-
-  // 3. Giọng tự nhiên Microsoft (dùng được trên Chrome & Edge) hoặc Google
-  speechSynthesis.cancel();
-  chrome.runtime.sendMessage({ type: 'tts', text, voice: vSetting }, (r) => {
-    if (!r || !r.ok) return;
     const a = new Audio('data:audio/mpeg;base64,' + r.result);
-    a.playbackRate = settings.rate;
+    a.playbackRate = 1.0;
     a.volume = settings.dubVolume;
-    a.play();
+    testAudio = a;
+    a.play().catch(() => {});
   });
 });
 
@@ -117,12 +133,21 @@ function showStatus(r) {
     $('status').textContent = 'Mở một video YouTube để dùng.';
     return;
   }
+
   btn.disabled = false;
   btn.className = r.active ? '' : 'off';
-  btn.textContent = r.active ? 'Tắt lồng tiếng' : 'Bật lồng tiếng video này';
-  $('status').textContent = !r.active ? 'Đang tắt.'
-    : r.loading ? 'Đang lấy phụ đề và dịch…'
-    : `Đang lồng tiếng ${r.count} câu · ${r.voice}`;
+
+  if (r.active) {
+    btn.textContent = 'Tắt lồng tiếng';
+    $('status').textContent = r.loading
+      ? 'Đang lấy phụ đề và dịch…'
+      : `Đang lồng tiếng ${r.count} câu · ${r.voice}`;
+  } else {
+    btn.textContent = r.isVietnamese ? 'Bật lồng tiếng thủ công' : 'Bật lồng tiếng video này';
+    $('status').textContent = r.isVietnamese
+      ? 'Video gốc là tiếng Việt (Tự động bỏ qua).'
+      : 'Đang tắt.';
+  }
 }
 
 let tabId = null;

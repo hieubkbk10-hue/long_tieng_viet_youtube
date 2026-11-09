@@ -5,15 +5,22 @@
 
   const DEFAULTS = {
     autoStart: true,
-    voice: '',          // '' = tự chọn giọng hay nhất, 'google' = Google Dịch, còn lại = tên giọng
+    skipVietnamese: true, // Tự nhận diện và bỏ qua video tiếng Việt
+    voice: '',          // '' = tự chọn giọng hay nhất (Hoài My), 'ms-namminh', 'google'
+    pitch: 0,           // Cao độ: -8 (Trầm ấm), 0 (Chuẩn), +5 (Thanh thoát)
     rate: 1.1,
     duckSpeaking: 0.15, // âm gốc khi đang đọc
     duckGap: 0.4,       // âm gốc lúc nghỉ giữa các câu
     dubVolume: 1,
     showSubs: false,
+    smartFilter: true,  // Bỏ qua nhạc và tiếng động không lời
   };
   const CACHE_PREFIX = 'ltv1:';
   const VI = /^vi([-_]|$)/i;
+  const VI_CHARS = /[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]/i;
+  const NOISE_PATTERN = /^(?:\[.*?\]|\(.*?\)|[♪♫\s\-_.,!?]+)$/i;
+  const MUSIC_WORDS = /^(?:music|applause|laughter|cheering|gasp|sigh|chuckle|tiếng nhạc|âm nhạc|vỗ tay|tiếng cười|nhạc)$/i;
+
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
   const cancelled = new Error('cancelled');
@@ -21,6 +28,7 @@
   let S = { ...DEFAULTS };
   const st = {
     videoId: null, active: false, loading: false, loadToken: 0,
+    isVietnamese: false,
     cues: [], nextIdx: 0,
     speaking: false, speakToken: 0, speakDeadline: 0,
     video: null, base: null, factor: 1, lastSetVol: -1,
@@ -42,6 +50,21 @@
     });
   }
 
+  // Đảm bảo inject.js chạy trong Main world ở cả Chrome và Edge
+  async function ensureInjected() {
+    try {
+      const pong = await pageCall('ping');
+      if (pong !== null && pong !== undefined) return;
+      const scriptUrl = chrome.runtime.getURL('inject.js');
+      if (!document.querySelector(`script[src="${scriptUrl}"]`)) {
+        const s = document.createElement('script');
+        s.src = scriptUrl;
+        s.onload = () => s.remove();
+        (document.head || document.documentElement).appendChild(s);
+      }
+    } catch {}
+  }
+
   function bg(msg) {
     return new Promise((resolve, reject) => {
       try {
@@ -52,6 +75,56 @@
         });
       } catch (err) { reject(err); }
     });
+  }
+
+  // ---------- Tự động nhận diện video tiếng Việt (4 lớp) ----------
+  async function checkIsVietnamese(videoId, cachedInfo) {
+    try {
+      let info = cachedInfo;
+      if (!info) {
+        for (let i = 0; i < 12; i++) {
+          const r = await pageCall('getTracks');
+          if (r && (!videoId || r.videoId === videoId || !r.videoId)) {
+            info = r;
+            break;
+          }
+          await sleep(150);
+        }
+      }
+
+      if (!info) {
+        const title = document.title || '';
+        const viChars = (title.match(/[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]/gi) || []).length;
+        return viChars >= 4;
+      }
+
+      // Lớp 1: Ngôn ngữ âm thanh gốc (defaultAudioLanguage)
+      if (info.defaultAudioLanguage && /^vi/i.test(info.defaultAudioLanguage)) {
+        return true;
+      }
+
+      // Lớp 2: Có phụ đề nhận diện giọng nói tự động (ASR) bằng tiếng Việt
+      const tracks = info.tracks || [];
+      if (tracks.some((t) => t.kind === 'asr' && /^vi/i.test(t.languageCode))) {
+        return true;
+      }
+
+      // Lớp 3: Chỉ có phụ đề tiếng Việt (toàn bộ tracks đều là tiếng Việt)
+      if (tracks.length > 0 && tracks.every((t) => /^vi/i.test(t.languageCode))) {
+        return true;
+      }
+
+      // Lớp 4: Tiêu đề video có nhiều dấu tiếng Việt đặc trưng
+      const title = info.title || document.title || '';
+      const viChars = (title.match(/[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]/gi) || []).length;
+      if (viChars >= 3) {
+        return true;
+      }
+
+      return false;
+    } catch {
+      return false;
+    }
   }
 
   // ---------- Lấy & dịch phụ đề ----------
@@ -84,12 +157,13 @@
     return u.href;
   }
 
-  // YouTube giờ yêu cầu token trong URL phụ đề: bật CC thoáng qua để trình phát tự tải, rồi mượn URL đó.
+  // YouTube yêu cầu token trong URL phụ đề: bật CC thoáng qua để trình phát tự tải, rồi mượn URL đó
   async function captureUrl(videoId) {
     const get = () => pageCall('getCaptured', { videoId });
     let url = await get();
     if (url && url.includes('pot=')) return url;
-    const btn = document.querySelector('#movie_player .ytp-subtitles-button');
+    const btn = document.querySelector('#movie_player .ytp-subtitles-button') ||
+      document.querySelector('.ytp-subtitles-button');
     if (!btn) return url;
     const wasOn = btn.getAttribute('aria-pressed') === 'true';
     btn.click();
@@ -106,13 +180,25 @@
   function parseEvents(events) {
     const out = [];
     for (const ev of events) {
-      const text = ev.segs.map((s) => s.utf8 || '').join('')
+      const rawText = ev.segs.map((s) => s.utf8 || '').join('').trim();
+      if (!rawText) continue;
+
+      // Bộ lọc âm thanh/nhạc không lời thông minh
+      const cleanSound = rawText.replace(/[\[\]\(\)♪♫]/g, '').trim();
+      const isNoise = !cleanSound || MUSIC_WORDS.test(cleanSound) || NOISE_PATTERN.test(rawText);
+      if (isNoise && S.smartFilter) {
+        continue; // Bỏ qua đoạn nhạc/vỗ tay để giữ trọn vẹn âm gốc
+      }
+
+      const text = rawText
         .replace(/\n/g, ' ')
         .replace(/\[[^\]]*\]/g, '')
+        .replace(/\([^\)]*\)/g, '')
         .replace(/[♪♫]/g, '')
         .replace(/\s+/g, ' ')
         .trim();
-      if (!text) continue;
+      if (!text || text.length < 2) continue;
+
       const start = (ev.tStartMs || 0) / 1000;
       out.push({ start, end: start + (ev.dDurationMs || 2000) / 1000, text });
     }
@@ -239,29 +325,25 @@
   }
 
   // ---------- Giọng đọc ----------
+  // Cả Chrome & Edge đều ưu tiên Microsoft Azure Neural TTS (Hoài My & Nam Minh) qua Background Audio
+  // để đảm bảo 100% chất lượng cao, không bao giờ bị dính bug WebSpeech trên Edge
   let voices = [];
   const loadVoices = () => { voices = speechSynthesis.getVoices().filter((v) => VI.test(v.lang)); };
   loadVoices();
   speechSynthesis.addEventListener('voiceschanged', loadVoices);
 
   function pickVoice() {
-    if (S.voice === 'google' || S.voice === 'ms-hoaimy' || S.voice === 'ms-namminh') return null;
-    if (S.voice) {
-      const v = voices.find((x) => x.name === S.voice);
-      if (v) return v;
+    if (!S.voice || S.voice === 'ms-hoaimy' || S.voice === 'ms-namminh' || S.voice === 'google') {
+      return null;
     }
-    // Edge có giọng "Natural" (HoaiMy, NamMinh) rất tự nhiên trong WebSpeech
-    const edgeNatural = voices.find((v) => /natural|online/i.test(v.name));
-    if (edgeNatural) return edgeNatural;
-    // Trên Chrome không có giọng Natural trong WebSpeech -> trả về null để dùng MS Neural TTS qua background
-    return null;
+    return voices.find((x) => x.name === S.voice) || null;
   }
 
   function currentVoiceName() {
     const v = pickVoice();
     if (v) return v.name.replace(/^Microsoft\s+/, '').replace(/\s+-.*$/, '');
     if (S.voice === 'ms-namminh') return 'Nam Minh (Tự nhiên)';
-    if (S.voice === 'google') return 'Google Dịch (online)';
+    if (S.voice === 'google') return 'Google Dịch (dự phòng)';
     return 'Hoài My (Tự nhiên)';
   }
 
@@ -286,7 +368,7 @@
       u.onstart = onStart;
       u.onend = fin;
       u.onerror = (e) => { if (e.error === 'not-allowed') warnBlocked(); fin(); };
-      this.cur = u; // giữ tham chiếu, tránh lỗi Chrome dọn rác giữa chừng
+      this.cur = u;
       speechSynthesis.speak(u);
     },
     stop() { this.cur = null; speechSynthesis.cancel(); },
@@ -316,25 +398,33 @@
 
   const AudioTTS = {
     cache: new Map(), audio: null, playId: 0, release: null,
-    chunks(text) {
-      const key = `${text}::${S.voice}`;
+    chunks(text, rate = 1, pitch = 0) {
+      const roundedRate = Math.round(rate * 10) / 10;
+      const key = `${text}::${S.voice}::${roundedRate}::${pitch}`;
       if (!this.cache.has(key)) {
-        const p = Promise.all(splitText(text, 250).map((c) => bg({ type: 'tts', text: c, voice: S.voice }).then(b64ToUrl)));
+        const p = Promise.all(splitText(text, 250).map((c) => bg({
+          type: 'tts',
+          text: c,
+          voice: S.voice,
+          rate: roundedRate,
+          pitch
+        }).then(b64ToUrl)));
         p.catch(() => this.cache.delete(key));
         this.cache.set(key, p);
       }
       return this.cache.get(key);
     },
-    prefetch(text) { this.chunks(text).catch(() => {}); },
+    prefetch(text, rate = 1, pitch = 0) { this.chunks(text, rate, pitch).catch(() => {}); },
     async speak(text, rate, volume, onStart, onEnd) {
       const id = ++this.playId;
       try {
-        const urls = await this.chunks(text);
+        const urls = await this.chunks(text, rate, S.pitch || 0);
         for (let i = 0; i < urls.length && id === this.playId; i++) {
           await new Promise((res) => {
             const a = new Audio(urls[i]);
             a.preservesPitch = true;
-            a.playbackRate = rate;
+            // Tốc độ đã được SSML Microsoft tổng hợp tự nhiên, giữ playbackRate ổn định
+            a.playbackRate = 1.0;
             a.volume = volume;
             this.audio = a;
             this.release = res;
@@ -361,7 +451,7 @@
       this.cache.clear();
     },
   };
-  const GoogleTTS = AudioTTS; // alias cho code hiện tại
+  const GoogleTTS = AudioTTS;
 
   // ---------- Đồng bộ lời đọc với video ----------
   function findIdx(t) {
@@ -375,12 +465,14 @@
     const t = v.currentTime;
     const next = st.cues[idx + 1];
     const until = next ? next.start : cue.end + 2;
-    const avail = Math.max(0.7, (until - Math.max(t, cue.start)) / (v.playbackRate || 1));
+    const playbackRate = v.playbackRate || 1;
+    const avail = Math.max(0.7, (until - Math.max(t, cue.start)) / playbackRate);
     const voice = pickVoice();
     const kind = voice ? 'web' : 'google';
-    // Đọc nhanh hơn nếu câu dài so với khoảng thời gian có sẵn
+
+    // Đọc nhanh hơn nếu câu dài so với khoảng thời gian và đồng bộ tự động theo tốc độ video
     const need = cue.text.length / st.cps[kind] / avail;
-    const rate = clamp(Math.max(S.rate, need), 0.5, 2);
+    const rate = clamp(Math.max(S.rate * playbackRate, need), 0.5, 2.0);
     const token = ++st.speakToken;
     st.speaking = true;
     st.speakDeadline = performance.now() + (cue.text.length / st.cps[kind] / rate) * 2500 + 6000;
@@ -396,11 +488,14 @@
         if (dur > 0.5) st.cps[kind] = clamp(st.cps[kind] * 0.8 + (cue.text.length / (dur * rate)) * 0.2, 8, 30);
       }
     };
+
     if (voice) {
       WebSpeech.speak(cue.text, rate, voice, S.dubVolume, onStart, onEnd);
     } else {
-      GoogleTTS.speak(cue.text, rate, S.dubVolume, onStart, onEnd);
-      for (let k = 1; k <= 2; k++) if (st.cues[idx + k]) GoogleTTS.prefetch(st.cues[idx + k].text);
+      AudioTTS.speak(cue.text, rate, S.dubVolume, onStart, onEnd);
+      for (let k = 1; k <= 2; k++) {
+        if (st.cues[idx + k]) AudioTTS.prefetch(st.cues[idx + k].text, rate, S.pitch || 0);
+      }
     }
   }
 
@@ -408,16 +503,16 @@
     st.speakToken++;
     st.speaking = false;
     WebSpeech.stop();
-    GoogleTTS.stop();
+    AudioTTS.stop();
     setSub('');
   }
 
-  // ---------- Âm lượng gốc ----------
+  // ---------- Âm lượng gốc (Smooth Audio Ducking) ----------
   function applyVol() {
     const v = st.video;
     if (!v || st.base == null) return;
     const want = clamp(st.base * st.factor, 0, 1);
-    if (Math.abs(v.volume - want) > 0.004) {
+    if (Math.abs(v.volume - want) > 0.003) {
       st.lastSetVol = want;
       v.volume = want;
     }
@@ -448,20 +543,35 @@
     });
     v.addEventListener('volumechange', () => {
       if (!st.active || st.base == null) return;
-      if (Math.abs(v.volume - st.lastSetVol) < 0.003) return; // do mình chỉnh
-      st.base = v.volume; // người dùng chỉnh âm lượng
+      if (Math.abs(v.volume - st.lastSetVol) < 0.003) return; // do extension tự điều chỉnh
+      st.base = v.volume; // người dùng chủ động chỉnh âm lượng
       st.lastSetVol = -1;
       applyVol();
     });
   }
 
-  const getVideo = () => document.querySelector('#movie_player video.html5-main-video') || document.querySelector('video.html5-main-video');
-  const currentVideoId = () => (location.pathname === '/watch' ? new URLSearchParams(location.search).get('v') : null);
+  const currentVideoId = () => {
+    if (location.pathname === '/watch') {
+      return new URLSearchParams(location.search).get('v');
+    }
+    const m = location.pathname.match(/\/shorts\/([a-zA-Z0-9_-]+)/);
+    return m ? m[1] : null;
+  };
+
+  const getVideo = () => {
+    return document.querySelector('#movie_player video.html5-main-video') ||
+      document.querySelector('ytd-shorts video.html5-main-video') ||
+      document.querySelector('#shorts-player video') ||
+      document.querySelector('video.html5-main-video') ||
+      document.querySelector('video');
+  };
 
   function tick() {
     ensureButton();
     const vid = currentVideoId();
-    if (vid !== st.videoId) onVideoChange(vid);
+    if (vid !== st.videoId) {
+      onVideoChange(vid);
+    }
     if (!st.active) return;
     const v = getVideo();
     if (!v) return;
@@ -471,8 +581,11 @@
 
     const ad = !!document.querySelector('#movie_player.ad-showing');
     if (ad && st.speaking) stopSpeech();
+
+    // Smooth Ducking: hạ âm nhanh (0.08), trả lại âm lượng từ từ (0.03) để mượt mà
     const target = ad ? 1 : st.speaking ? S.duckSpeaking : S.duckGap;
-    st.factor += clamp(target - st.factor, -0.12, 0.04); // giảm nhanh, trả lại từ từ
+    const step = target < st.factor ? 0.08 : 0.03;
+    st.factor += clamp(target - st.factor, -step, step);
     applyVol();
     if (ad || v.paused || v.seeking || v.ended) return;
 
@@ -485,20 +598,34 @@
     if (!c) return;
     const t = v.currentTime;
     if (c.start > t + 0.1) return;
-    if (t > c.end + 1) { st.nextIdx = Math.max(i + 1, findIdx(t)); return; } // bị trễ quá -> nhảy tới câu hiện tại
+    if (t > c.end + 1) { st.nextIdx = Math.max(i + 1, findIdx(t)); return; }
     st.nextIdx = i + 1;
     speakCue(i);
   }
 
   // ---------- Bật / tắt ----------
-  function onVideoChange(vid) {
+  async function onVideoChange(vid) {
     stop(true);
     st.videoId = vid;
+    st.isVietnamese = false;
     st.cues = [];
     st.nextIdx = 0;
     st.loadToken++;
-    GoogleTTS.clear();
-    if (vid && S.autoStart) start();
+    AudioTTS.clear();
+    if (!vid) return;
+
+    // Kiểm tra tự động xem video có phải là tiếng Việt sẵn không
+    if (S.skipVietnamese) {
+      const isVi = await checkIsVietnamese(vid);
+      if (isVi) {
+        st.isVietnamese = true;
+        updateButton();
+        toast('Video gốc là tiếng Việt — Đã tự động tắt lồng tiếng.', 3500);
+        return;
+      }
+    }
+
+    if (S.autoStart) start();
   }
 
   async function start() {
@@ -524,7 +651,7 @@
       st.cues = cues;
       const vv = getVideo();
       st.nextIdx = vv ? findIdx(vv.currentTime) : 0;
-      if (!pickVoice()) cues.slice(st.nextIdx, st.nextIdx + 2).forEach((c) => GoogleTTS.prefetch(c.text));
+      if (!pickVoice()) cues.slice(st.nextIdx, st.nextIdx + 2).forEach((c) => AudioTTS.prefetch(c.text, S.rate, S.pitch || 0));
       toast(`Lồng tiếng Việt: BẬT (${cues.length} câu)`);
     } catch (e) {
       if (e === cancelled || token !== st.loadToken) return;
@@ -548,18 +675,168 @@
     if (st.active) stop(); else start();
   }
 
-  // ---------- Giao diện trên trình phát ----------
+  // ---------- Giao diện trên trình phát & Quick Control Popup ----------
+  let quickPopupEl = null;
+
+  function ensureQuickPopup() {
+    if (quickPopupEl) return quickPopupEl;
+    const qp = document.createElement('div');
+    qp.className = 'ltv-quick-popup';
+    qp.innerHTML = `
+      <div class="ltv-qp-header">
+        <span class="ltv-qp-title"><span class="ltv-flag">★</span> Cài đặt lồng tiếng</span>
+        <button type="button" class="ltv-qp-close" title="Đóng">&times;</button>
+      </div>
+      <div class="ltv-qp-body">
+        <div class="ltv-qp-row">
+          <label>Âm lượng lồng tiếng</label>
+          <span class="ltv-qp-val" id="ltv-qp-vol-val">${Math.round(S.dubVolume * 100)}%</span>
+        </div>
+        <input type="range" id="ltv-qp-vol" min="0.2" max="1" step="0.05" value="${S.dubVolume}">
+
+        <div class="ltv-qp-row">
+          <label>Giọng đọc</label>
+        </div>
+        <select id="ltv-qp-voice">
+          <option value="" ${!S.voice ? 'selected' : ''}>Hoài My (Tự nhiên - Nữ)</option>
+          <option value="ms-namminh" ${S.voice === 'ms-namminh' ? 'selected' : ''}>Nam Minh (Tự nhiên - Nam)</option>
+          <option value="google" ${S.voice === 'google' ? 'selected' : ''}>Google Dịch (Dự phòng)</option>
+        </select>
+
+        <div class="ltv-qp-row">
+          <label>Tone giọng (Pitch)</label>
+        </div>
+        <select id="ltv-qp-pitch">
+          <option value="-8" ${S.pitch === -8 ? 'selected' : ''}>Trầm ấm (-8Hz)</option>
+          <option value="0" ${!S.pitch ? 'selected' : ''}>Chuẩn (0Hz)</option>
+          <option value="5" ${S.pitch === 5 ? 'selected' : ''}>Thanh thoát (+5Hz)</option>
+        </select>
+
+        <hr class="ltv-qp-divider">
+        <label class="ltv-qp-check">
+          <input type="checkbox" id="ltv-qp-skipvi" ${S.skipVietnamese ? 'checked' : ''}> Tự bỏ qua video tiếng Việt
+        </label>
+        <label class="ltv-qp-check">
+          <input type="checkbox" id="ltv-qp-filter" ${S.smartFilter ? 'checked' : ''}> Lọc nhạc và tiếng động không lời
+        </label>
+        <label class="ltv-qp-check">
+          <input type="checkbox" id="ltv-qp-subs" ${S.showSubs ? 'checked' : ''}> Hiện phụ đề tiếng Việt
+        </label>
+      </div>
+    `;
+
+    document.body.appendChild(qp);
+    quickPopupEl = qp;
+
+    qp.querySelector('.ltv-qp-close').addEventListener('click', (e) => {
+      e.stopPropagation();
+      qp.classList.remove('show');
+    });
+
+    const vol = qp.querySelector('#ltv-qp-vol');
+    vol.addEventListener('input', (e) => {
+      const v = Number(e.target.value);
+      qp.querySelector('#ltv-qp-vol-val').textContent = Math.round(v * 100) + '%';
+      S.dubVolume = v;
+      chrome.storage.sync.set({ dubVolume: v });
+    });
+
+    const voice = qp.querySelector('#ltv-qp-voice');
+    voice.addEventListener('change', (e) => {
+      S.voice = e.target.value;
+      chrome.storage.sync.set({ voice: e.target.value });
+      AudioTTS.clear();
+      updateButton();
+    });
+
+    const pitch = qp.querySelector('#ltv-qp-pitch');
+    pitch.addEventListener('change', (e) => {
+      const pt = Number(e.target.value);
+      S.pitch = pt;
+      chrome.storage.sync.set({ pitch: pt });
+      AudioTTS.clear();
+    });
+
+    const skipVi = qp.querySelector('#ltv-qp-skipvi');
+    skipVi.addEventListener('change', (e) => {
+      S.skipVietnamese = e.target.checked;
+      chrome.storage.sync.set({ skipVietnamese: e.target.checked });
+    });
+
+    const filter = qp.querySelector('#ltv-qp-filter');
+    filter.addEventListener('change', (e) => {
+      S.smartFilter = e.target.checked;
+      chrome.storage.sync.set({ smartFilter: e.target.checked });
+    });
+
+    const subs = qp.querySelector('#ltv-qp-subs');
+    subs.addEventListener('change', (e) => {
+      S.showSubs = e.target.checked;
+      chrome.storage.sync.set({ showSubs: e.target.checked });
+      if (!S.showSubs) setSub('');
+    });
+
+    // Bấm ra ngoài để đóng quick popup
+    document.addEventListener('click', (e) => {
+      if (!qp.contains(e.target) && !e.target.closest('.ltv-btn')) {
+        qp.classList.remove('show');
+      }
+    });
+
+    return qp;
+  }
+
+  function toggleQuickPopup(btnEl) {
+    const qp = ensureQuickPopup();
+    if (qp.classList.contains('show')) {
+      qp.classList.remove('show');
+      return;
+    }
+
+    const rect = btnEl.getBoundingClientRect();
+    qp.style.bottom = (window.innerHeight - rect.top + 8) + 'px';
+    qp.style.right = (window.innerWidth - rect.right) + 'px';
+    qp.classList.add('show');
+  }
+
   function ensureButton() {
-    const ctr = document.querySelector('#movie_player .ytp-right-controls');
+    const ctr = document.querySelector('#movie_player .ytp-right-controls') ||
+      document.querySelector('.ytp-right-controls') ||
+      document.querySelector('.ytp-chrome-controls .ytp-right-controls');
     if (!ctr || ctr.querySelector('.ltv-btn')) return;
+
     const b = document.createElement('button');
     b.className = 'ytp-button ltv-btn';
-    b.title = 'Lồng tiếng Việt (Alt+V)';
+    b.title = 'Lồng tiếng Việt (Alt+V) - Bấm biểu tượng ⚙ để cài đặt nhanh';
+
     const pill = document.createElement('span');
     pill.className = 'ltv-pill';
     pill.textContent = 'VI';
     b.appendChild(pill);
-    b.addEventListener('click', (e) => { e.stopPropagation(); toggle(); });
+
+    const gear = document.createElement('span');
+    gear.className = 'ltv-gear';
+    gear.title = 'Cài đặt lồng tiếng';
+    gear.innerHTML = '⚙';
+    gear.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      toggleQuickPopup(b);
+    });
+    b.appendChild(gear);
+
+    b.addEventListener('click', (e) => {
+      if (e.target.classList.contains('ltv-gear')) return;
+      e.stopPropagation();
+      toggle();
+    });
+
+    b.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleQuickPopup(b);
+    });
+
     ctr.prepend(b);
     updateButton();
   }
@@ -567,11 +844,26 @@
   function updateButton() {
     const b = document.querySelector('.ltv-btn');
     if (!b) return;
+    const pill = b.querySelector('.ltv-pill');
+
     b.classList.toggle('on', st.active && !st.loading);
     b.classList.toggle('loading', st.active && st.loading);
+    b.classList.toggle('is-vi', !!st.isVietnamese && !st.active);
+
+    if (st.isVietnamese && !st.active) {
+      if (pill) pill.textContent = 'VI Gốc';
+      b.title = 'Video gốc là tiếng Việt (Tự động bỏ qua — bấm để bật thủ công)';
+    } else {
+      if (pill) pill.textContent = 'VI';
+      b.title = 'Lồng tiếng Việt (Alt+V) — Bấm ⚙ để mở cài đặt nhanh';
+    }
   }
 
-  function playerEl() { return document.getElementById('movie_player'); }
+  function playerEl() {
+    return document.getElementById('movie_player') ||
+      document.querySelector('.html5-video-player') ||
+      document.body;
+  }
 
   let toastTimer = 0;
   function toast(msg, ms = 2500) {
@@ -606,16 +898,26 @@
   chrome.runtime.onMessage.addListener((m, _s, send) => {
     if (m.type === 'toggle') toggle();
     if (m.type === 'toggle' || m.type === 'status') {
-      send({ videoId: st.videoId, active: st.active, loading: st.loading, count: st.cues.length, voice: currentVoiceName() });
+      send({
+        videoId: st.videoId,
+        active: st.active,
+        loading: st.loading,
+        isVietnamese: st.isVietnamese,
+        count: st.cues.length,
+        voice: currentVoiceName()
+      });
     }
   });
 
   chrome.storage.onChanged.addListener((ch, area) => {
     if (area !== 'sync') return;
     for (const k in ch) S[k] = ch[k].newValue;
-    if (ch.voice) AudioTTS.clear();
+    if (ch.voice || ch.pitch !== undefined) AudioTTS.clear();
     if (!S.showSubs) setSub('');
+    updateButton();
   });
+
+  ensureInjected();
 
   chrome.storage.sync.get(DEFAULTS, (v) => {
     S = { ...DEFAULTS, ...v };

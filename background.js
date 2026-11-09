@@ -6,7 +6,7 @@ const MS_KEY_B64 = 'oik6PdDdMnOXemTbwvMn9de/h9lFnfBaCWbGMMZqqoSaQaqUOqjVGm5Nqsmj
 
 chrome.runtime.onMessage.addListener((msg, _sender, send) => {
   const job = msg.type === 'translate' ? translate(msg.texts)
-    : msg.type === 'tts' ? tts(msg.text, msg.voice)
+    : msg.type === 'tts' ? tts(msg.text, msg.voice, msg.rate, msg.pitch)
     : null;
   if (!job) return false;
   job.then(
@@ -122,7 +122,20 @@ async function getMsEndpoint() {
   return data;
 }
 
-function getSsml(text, voiceName) {
+function formatRate(rate) {
+  if (typeof rate !== 'number' || isNaN(rate)) return '+0%';
+  const clamped = Math.min(2, Math.max(0.5, rate));
+  const pct = Math.round((clamped - 1) * 100);
+  return (pct >= 0 ? '+' : '') + pct + '%';
+}
+
+function formatPitch(pitch) {
+  if (typeof pitch !== 'number' || isNaN(pitch)) return '+0Hz';
+  const clamped = Math.min(20, Math.max(-20, Math.round(pitch)));
+  return (clamped >= 0 ? '+' : '') + clamped + 'Hz';
+}
+
+function getSsml(text, voiceName, rate, pitch) {
   const escapedText = text
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -130,16 +143,19 @@ function getSsml(text, voiceName) {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&apos;');
 
+  const rateStr = formatRate(rate);
+  const pitchStr = formatPitch(pitch);
+
   return `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='vi-VN'>` +
     `<voice name='${voiceName}'>` +
-    `<prosody rate='+0%' pitch='+0Hz' volume='+0%'>${escapedText}</prosody>` +
+    `<prosody rate='${rateStr}' pitch='${pitchStr}' volume='+0%'>${escapedText}</prosody>` +
     `</voice></speak>`;
 }
 
-async function synthesizeMsTts(text, voiceName) {
+async function synthesizeMsTts(text, voiceName, rate, pitch) {
   const endpoint = await getMsEndpoint();
   const url = `https://${endpoint.r}.tts.speech.microsoft.com/cognitiveservices/v1`;
-  const ssml = getSsml(text, voiceName);
+  const ssml = getSsml(text, voiceName, rate, pitch);
 
   let response = await fetch(url, {
     method: 'POST',
@@ -165,7 +181,7 @@ async function synthesizeMsTts(text, voiceName) {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0',
         'X-Microsoft-OutputFormat': 'audio-24khz-48kbitrate-mono-mp3'
       },
-      body: ssml
+      body: getSsml(text, voiceName, rate, pitch)
     });
   }
 
@@ -188,14 +204,14 @@ async function googleTts(text) {
 }
 
 // ---------- Hàm điều phối TTS ----------
-async function tts(text, voice) {
+async function tts(text, voice, rate, pitch) {
   if (voice === 'google') {
     return googleTts(text);
   }
 
   const msVoice = voice === 'ms-namminh' ? 'vi-VN-NamMinhNeural' : 'vi-VN-HoaiMyNeural';
   try {
-    return await synthesizeMsTts(text, msVoice);
+    return await synthesizeMsTts(text, msVoice, rate, pitch);
   } catch (err) {
     console.warn('MS Natural TTS lỗi, chuyển sang Google TTS dự phòng:', err);
     return await googleTts(text);

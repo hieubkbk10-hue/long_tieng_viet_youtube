@@ -1,13 +1,13 @@
 {
   "manifest_version": 3,
   "name": "Lồng Tiếng Việt cho YouTube",
-  "version": "1.0.1",
-  "description": "Tự động lồng tiếng Việt cho video YouTube nước ngoài: dịch phụ đề, đọc bằng giọng Việt, giảm âm gốc.",
+  "version": "1.1.0",
+  "description": "Tự động lồng tiếng Việt cho video YouTube nước ngoài: dịch phụ đề, đọc bằng giọng Việt tự nhiên, giảm âm gốc mượt mà.",
   "permissions": [
     "storage"
   ],
   "host_permissions": [
-    "https://www.youtube.com/*",
+    "*://*.youtube.com/*",
     "https://translate.googleapis.com/*",
     "https://translate.google.com/*",
     "https://dev.microsofttranslator.com/*",
@@ -19,7 +19,7 @@
   "content_scripts": [
     {
       "matches": [
-        "https://www.youtube.com/*"
+        "*://*.youtube.com/*"
       ],
       "js": [
         "inject.js"
@@ -29,7 +29,7 @@
     },
     {
       "matches": [
-        "https://www.youtube.com/*"
+        "*://*.youtube.com/*"
       ],
       "js": [
         "content.js"
@@ -38,6 +38,16 @@
         "content.css"
       ],
       "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "inject.js"
+      ],
+      "matches": [
+        "*://*.youtube.com/*"
+      ]
     }
   ],
   "action": {

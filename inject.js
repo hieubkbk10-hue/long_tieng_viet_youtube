@@ -1,6 +1,6 @@
 // Chạy trong trang YouTube (MAIN world):
 // - bắt URL phụ đề mà trình phát tự tải (có token "pot" mà YouTube bắt buộc)
-// - đọc danh sách phụ đề của video hiện tại
+// - đọc danh sách phụ đề và thông tin ngôn ngữ video hiện tại
 (() => {
   if (window.__ltvInjected) return;
   window.__ltvInjected = true;
@@ -17,10 +17,12 @@
       caps.set(v, full.href);
     } catch {}
   };
+
   const findCaptured = (v) => {
-    // Bắt cả request đã chạy trước khi hook kịp gắn
     try {
-      performance.getEntriesByType('resource').forEach((e) => { if (e.name.includes('/api/timedtext')) report(e.name); });
+      performance.getEntriesByType('resource').forEach((e) => {
+        if (e.name.includes('/api/timedtext')) report(e.name);
+      });
     } catch {}
     return caps.get(v) || null;
   };
@@ -37,30 +39,61 @@
     return origOpen.apply(this, arguments);
   };
 
+  function getPlayerResponse() {
+    try {
+      const p = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+      if (p && typeof p.getPlayerResponse === 'function') {
+        const res = p.getPlayerResponse();
+        if (res) return res;
+      }
+    } catch {}
+    if (window.ytInitialPlayerResponse) {
+      return window.ytInitialPlayerResponse;
+    }
+    return null;
+  }
+
   window.addEventListener('message', (e) => {
     if (e.source !== window || !e.data || e.data.source !== 'ltv-content') return;
+
+    if (e.data.type === 'ping') {
+      window.postMessage({ source: 'ltv-page', type: 'pong', id: e.data.id }, '*');
+      return;
+    }
+
     if (e.data.type === 'getCaptured') {
       window.postMessage({ source: 'ltv-page', type: 'captured', id: e.data.id, payload: findCaptured(e.data.videoId) }, '*');
       return;
     }
-    if (e.data.type !== 'getTracks') return;
-    let payload = null;
-    try {
-      const p = document.getElementById('movie_player');
-      const r = p && p.getPlayerResponse && p.getPlayerResponse();
-      if (r) {
-        const list = (r.captions && r.captions.playerCaptionsTracklistRenderer &&
-          r.captions.playerCaptionsTracklistRenderer.captionTracks) || [];
-        payload = {
-          videoId: r.videoDetails && r.videoDetails.videoId,
-          tracks: list.map((t) => ({
-            baseUrl: t.baseUrl,
-            languageCode: t.languageCode || '',
-            kind: t.kind || '',
-          })),
-        };
-      }
-    } catch {}
-    window.postMessage({ source: 'ltv-page', type: 'tracks', id: e.data.id, payload }, '*');
+
+    if (e.data.type === 'getTracks') {
+      let payload = null;
+      try {
+        const r = getPlayerResponse();
+        if (r) {
+          const list = (r.captions && r.captions.playerCaptionsTracklistRenderer &&
+            r.captions.playerCaptionsTracklistRenderer.captionTracks) || [];
+          
+          const defaultAudioLang = (r.videoDetails && r.videoDetails.defaultAudioLanguage) ||
+            (r.microformat && r.microformat.playerMicroformatRenderer &&
+             r.microformat.playerMicroformatRenderer.defaultAudioLanguage) || '';
+
+          payload = {
+            videoId: (r.videoDetails && r.videoDetails.videoId) || null,
+            title: (r.videoDetails && r.videoDetails.title) || '',
+            author: (r.videoDetails && r.videoDetails.author) || '',
+            defaultAudioLanguage: defaultAudioLang,
+            tracks: list.map((t) => ({
+              baseUrl: t.baseUrl,
+              languageCode: t.languageCode || '',
+              kind: t.kind || '',
+              vssId: t.vssId || '',
+              name: (t.name && t.name.simpleText) || '',
+            })),
+          };
+        }
+      } catch {}
+      window.postMessage({ source: 'ltv-page', type: 'tracks', id: e.data.id, payload }, '*');
+    }
   });
 })();
